@@ -316,7 +316,7 @@ Download the file from [Fleet Releases](https://github.com/fleetdm/fleet/release
 #### Installation Steps
 
 1. **Extract Files**: Download and install to `C:\fleet` directory
-2. **Run as Administrator**: Navigate to `C:\fleet` path
+2. **Run Powershell as Administrator**: Navigate to `C:\fleet` path
 3. **Generate MSI Package**: Run the following command as Administrator:
 
 ```cmd
