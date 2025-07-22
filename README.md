@@ -342,6 +342,15 @@ sleep 60
 # Check service status - ALL SHOULD BE "Up"
 docker-compose ps
 ```
+# Initialize Fleet database
+docker-compose exec fleet fleet prepare db \
+  --mysql_address=mysql:3306 \
+  --mysql_database=fleet \
+  --mysql_username=fleet \
+  --mysql_password=fleet
+
+
+run ' fleet prepare db ' and then run docker-compose up -d 
 
 **✅ Verification**: All containers should show "Up" status.
 
