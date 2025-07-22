@@ -1,103 +1,222 @@
-<<<<<<<<<<<<<<<<<<   Fleet Installation Guide    >>>>>>>>>>>>>>>>>>>>>>>>
-A comprehensive guide for installing and configuring Fleet MDM (Mobile Device Management) on Ubuntu Server using Docker.
+# Fleet MDM Complete Installation Guide for Ubuntu Server
 
-## Table of Contents
-- [Prerequisites](#prerequisites)
-- [System Requirements](#system-requirements)
-- [Installation Steps](#installation-steps)
-- [Configuration](#configuration)
-- [Starting Fleet Services](#starting-fleet-services)
-- [Agent Deployment](#agent-deployment)
-- [Management Commands](#management-commands)
-- [Troubleshooting](#troubleshooting)
-- [Security Considerations](#security-considerations)
+> ⚠️ **IMPORTANT**: This guide must be followed step-by-step without skipping any commands. Each step builds upon the previous one.
 
-## Prerequisites
+## Overview
+Fleet is an open-source device management platform built on osquery. This guide provides a complete installation process for Ubuntu Server that will result in a fully functional Fleet MDM system.
 
-- Ubuntu Server (18.04 LTS or later recommended)
+## Prerequisites (MANDATORY)
+- Ubuntu Server 18.04 LTS or later
 - Root or sudo access
 - Minimum 4GB RAM, 20GB disk space
 - Network connectivity for downloading packages
+- Server with static IP or proper DNS configuration
 
-## System Requirements
+## Estimated Installation Time: 90-120 minutes
 
-- **RAM**: 4GB minimum, 8GB recommended
-- **Storage**: 20GB minimum, 50GB recommended
-- **Network**: Open ports 8080 (Fleet UI), 3306 (MySQL), 6379 (Redis)
+---
 
-## Installation Steps
+## 📋 Pre-Installation Checklist
 
-### 1. Update System Packages
+Before starting, verify these requirements:
+
+- [ ] Server has minimum 4GB RAM and 20GB free disk space
+- [ ] You have sudo/root access
+- [ ] Ports 8080, 3306, and 6379 are available
+- [ ] Server has internet connectivity
+- [ ] You have planned your admin credentials
+
+---
+
+## Phase 1: Infrastructure Setup (30-45 minutes)
+
+### Step 1: System Update and Essential Packages (REQUIRED)
 
 ```bash
+# Update system packages - DO NOT SKIP
 sudo apt update && sudo apt upgrade -y
+
+# Install essential packages - ALL REQUIRED
+sudo apt install -y git curl wget software-properties-common apt-transport-https ca-certificates gnupg lsb-release unzip
+
+# Verify installation
+dpkg -l | grep -E "(git|curl|wget)"
 ```
 
-### 2. Install Required Dependencies
+**✅ Verification**: Ensure all packages installed without errors.
+
+### Step 2: Docker Installation (CRITICAL)
 
 ```bash
-sudo apt install -y git curl wget software-properties-common apt-transport-https ca-certificates gnupg lsb-release
-```
-
-### 3. Install Docker (required for Fleet)
-
-Add Docker GPG key and repository:
-```bash
+# Add Docker GPG key - REQUIRED FOR SECURITY
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
+# Add Docker repository - EXACT COMMAND REQUIRED
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-```
 
-Update package index and install Docker:
-```bash
+# Update package index after adding repository
 sudo apt update
+
+# Install Docker components - ALL REQUIRED
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-```
 
-### 4. Add Current User to Docker Group (optional)
-
-```bash
+# Add current user to docker group - REQUIRED FOR PERMISSIONS
 sudo usermod -aG docker $USER
-```
-> **Note**: You'll need to logout and login again for this to take effect
 
-### 5. Install Docker Compose
+# Start and enable Docker service - REQUIRED
+sudo systemctl start docker
+sudo systemctl enable docker
 
-```bash
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-```
-
-### 6. Clone the Fleet Repository
-
-```bash
-git clone https://github.com/fleetdm/fleet.git
-cd fleet
+# Verify Docker installation - MUST SHOW VERSION
+docker --version
 ```
 
-### 7. Copy and Configure the Environment File
+**✅ Verification**: Docker version should display. If not, troubleshoot before proceeding.
 
+**⚠️ IMPORTANT**: Log out and log back in for group changes to take effect, or run:
 ```bash
-cp .env.example .env
+newgrp docker
 ```
 
-### 8. Edit the .env File with Your Configuration
+### Step 3: Docker Compose Installation (MANDATORY)
 
-You'll need to modify database credentials, server URL, etc.
-
-**Create and edit the .env file:**
 ```bash
-nano .env
+# Install Docker Compose - PRIMARY METHOD
+sudo apt install -y docker-compose
+
+# If above fails, use alternative method
+if ! command -v docker-compose &> /dev/null; then
+    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+fi
+
+# Verify Docker Compose installation - MUST SHOW VERSION
+docker-compose --version
 ```
 
-## Configuration
+**✅ Verification**: Docker Compose version should display.
 
-### Complete .env File Configuration
-
-Create the `.env` file with the following content:
+### Step 4: Fleet Directory Setup (REQUIRED)
 
 ```bash
-cat > .env << 'EOF'
+# Create Fleet working directory
+sudo mkdir -p /opt/fleet
+sudo chown $USER:$USER /opt/fleet
+cd /opt/fleet
+
+# Verify current directory
+pwd
+# Should output: /opt/fleet
+```
+
+### Step 5: Stop Conflicting Services (CRITICAL)
+
+```bash
+# Stop conflicting MySQL services - PREVENTS PORT CONFLICTS
+sudo systemctl stop mysql mysql.service mariadb mariadb.service 2>/dev/null || true
+sudo systemctl disable mysql mysql.service mariadb mariadb.service 2>/dev/null || true
+
+# Stop conflicting Redis services - PREVENTS PORT CONFLICTS
+sudo systemctl stop redis redis-server 2>/dev/null || true
+sudo systemctl disable redis redis-server 2>/dev/null || true
+
+# Check for port conflicts - MUST BE CLEAR
+echo "Checking for port conflicts..."
+sudo netstat -tlnp | grep -E ':(8080|3306|6379)' || echo "Ports are available"
+```
+
+**✅ Verification**: No output from netstat command means ports are available.
+
+---
+
+## Phase 2: Fleet Configuration (20-30 minutes)
+
+### Step 6: Create Docker Compose Configuration (MOST CRITICAL)
+
+```bash
+# Create docker-compose.yml - DO NOT MODIFY CONTENT
+cat > /opt/fleet/docker-compose.yml << 'EOF'
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: fleet_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${FLEET_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${FLEET_MYSQL_DATABASE}
+      MYSQL_USER: ${FLEET_MYSQL_USERNAME}
+      MYSQL_PASSWORD: ${FLEET_MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - fleet-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  redis:
+    image: redis:7-alpine
+    container_name: fleet_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - fleet-network
+
+  fleet:
+    image: fleetdm/fleet:latest
+    container_name: fleet_server
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      FLEET_MYSQL_ADDRESS: ${FLEET_MYSQL_ADDRESS}
+      FLEET_MYSQL_DATABASE: ${FLEET_MYSQL_DATABASE}
+      FLEET_MYSQL_USERNAME: ${FLEET_MYSQL_USERNAME}
+      FLEET_MYSQL_PASSWORD: ${FLEET_MYSQL_PASSWORD}
+      FLEET_REDIS_ADDRESS: ${FLEET_REDIS_ADDRESS}
+      FLEET_SERVER_ADDRESS: ${FLEET_SERVER_ADDRESS}
+      FLEET_AUTH_JWT_KEY: ${FLEET_AUTH_JWT_KEY}
+      FLEET_SESSION_KEY: ${FLEET_SESSION_KEY}
+      FLEET_SERVER_CERT: ${FLEET_SERVER_CERT}
+      FLEET_SERVER_KEY: ${FLEET_SERVER_KEY}
+      FLEET_SERVER_TLS: ${FLEET_SERVER_TLS}
+      FLEET_LOGGING_JSON: ${FLEET_LOGGING_JSON}
+    ports:
+      - "8080:8080"
+    volumes:
+      - fleet_data:/tmp
+    networks:
+      - fleet-network
+
+volumes:
+  mysql_data:
+  redis_data:
+  fleet_data:
+
+networks:
+  fleet-network:
+    driver: bridge
+EOF
+
+# Verify file creation
+ls -la /opt/fleet/docker-compose.yml
+```
+
+**✅ Verification**: File should exist and be readable.
+
+### Step 7: Create Environment Configuration (CRITICAL)
+
+⚠️ **SECURITY WARNING**: Change the default passwords before production use!
+
+```bash
+# Create .env file with secure configuration
+cat > /opt/fleet/.env << 'EOF'
 # Fleet Server Configuration
 FLEET_SERVER_ADDRESS=0.0.0.0:8080
 FLEET_SERVER_URL=http://localhost:8080
@@ -107,38 +226,20 @@ FLEET_LOGGING_JSON=true
 FLEET_MYSQL_ADDRESS=mysql:3306
 FLEET_MYSQL_DATABASE=fleet
 FLEET_MYSQL_USERNAME=fleet
-FLEET_MYSQL_PASSWORD=fleet_password_change_me
-FLEET_MYSQL_ROOT_PASSWORD=root_password_change_me
+FLEET_MYSQL_PASSWORD=SecureFleetPassword123!
+FLEET_MYSQL_ROOT_PASSWORD=SecureRootPassword123!
 
 # Redis Configuration
 FLEET_REDIS_ADDRESS=redis:6379
 
-# JWT Secret (change this to a random string)
-FLEET_AUTH_JWT_KEY=your_jwt_secret_key_change_me
+# Security Keys (CHANGE THESE IN PRODUCTION)
+FLEET_AUTH_JWT_KEY=your_very_secure_jwt_secret_key_32_chars_minimum_change_this
+FLEET_SESSION_KEY=your_very_secure_session_key_32_chars_minimum_change_this
 
-# Session Configuration
-FLEET_SESSION_KEY=your_session_key_change_me
-
-# File Storage (for software installers, etc.)
-FLEET_S3_BUCKET=
-FLEET_S3_PREFIX=
-FLEET_S3_ACCESS_KEY_ID=
-FLEET_S3_SECRET_ACCESS_KEY=
-FLEET_S3_STS_ASSUME_ROLE_ARN=
-FLEET_S3_ENDPOINT_URL=
-
-# Email Configuration (SMTP)
-FLEET_SMTP_SERVER=
-FLEET_SMTP_PORT=587
-FLEET_SMTP_AUTHENTICATION_TYPE=authtype_username_password
-FLEET_SMTP_USERNAME=
-FLEET_SMTP_PASSWORD=
-FLEET_SMTP_SENDER_ADDRESS=
-FLEET_SMTP_ENABLE_SSL_TLS=true
-FLEET_SMTP_AUTHENTICATION_METHOD=authmethod_plain
-FLEET_SMTP_DOMAIN=
-FLEET_SMTP_VERIFY_SSL_CERTS=true
-FLEET_SMTP_ENABLE_START_TLS=true
+# TLS Configuration
+FLEET_SERVER_TLS=false
+FLEET_SERVER_CERT=
+FLEET_SERVER_KEY=
 
 # Osquery Configuration
 FLEET_OSQUERY_RESULT_LOG_FILE=/tmp/osquery_result
@@ -147,372 +248,377 @@ FLEET_OSQUERY_STATUS_LOG_FILE=/tmp/osquery_status
 # Vulnerability Processing
 FLEET_VULNERABILITIES_DATABASES_PATH=/tmp/vuln
 
-# License (for Fleet Premium features)
-FLEET_LICENSE_KEY=
-
 # Development/Debug
 FLEET_DEV_MODE=false
 FLEET_LOGGING_DEBUG=false
-
-# Additional Security
-FLEET_SERVER_TLS=false
-FLEET_SERVER_CERT=
-FLEET_SERVER_KEY=
-
-# Webhook settings
-FLEET_WEBHOOK_SETTINGS_VULNERABILITIES_WEBHOOK_URL=
-FLEET_WEBHOOK_SETTINGS_HOST_STATUS_WEBHOOK_URL=
-
 EOF
+
+# Secure the .env file - CRITICAL FOR SECURITY
+chmod 600 /opt/fleet/.env
+
+# Set proper ownership
+sudo chown $USER:docker /opt/fleet/.env
+
+# Verify file creation and permissions
+ls -la /opt/fleet/.env
 ```
 
-### Make the Configuration File Readable
+**✅ Verification**: File should show `-rw-------` permissions.
+
+### Step 8: Install Fleet CLI (REQUIRED FOR MANAGEMENT)
 
 ```bash
-chmod 644 .env
+# Download fleetctl CLI tool
+cd /tmp
+curl -L https://github.com/fleetdm/fleet/releases/latest/download/fleetctl-linux.tar.gz -o fleetctl.tar.gz
+
+# Extract and install
+tar -xzf fleetctl.tar.gz
+sudo mv fleetctl /usr/local/bin/
+sudo chmod +x /usr/local/bin/fleetctl
+
+# Verify installation - MUST SHOW VERSION
+fleetctl --version
+
+# Clean up download files
+rm fleetctl.tar.gz
+
+# Return to Fleet directory
+cd /opt/fleet
 ```
 
-### Display Configuration Success Message
+**✅ Verification**: fleetctl version should display.
+
+---
+
+## Phase 3: Service Deployment (20-30 minutes)
+
+### Step 9: Configure Firewall (SECURITY CRITICAL)
 
 ```bash
-echo "✅ .env file created successfully!"
-echo "⚠️  IMPORTANT: Please edit the .env file and change the default passwords and secrets:"
-echo "   - FLEET_MYSQL_PASSWORD"
-echo "   - FLEET_MYSQL_ROOT_PASSWORD" 
-echo "   - FLEET_AUTH_JWT_KEY"
-echo "   - FLEET_SESSION_KEY"
-echo "   - FLEET_SERVER_URL (set to your server's IP/domain)"
-echo ""
-echo "Edit the file with: nano .env"
+# Reset firewall to clean state
+sudo ufw --force reset
+
+# Set default policies
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Allow SSH - CRITICAL: DON'T LOCK YOURSELF OUT
+sudo ufw allow 22/tcp
+
+# Allow Fleet web interface
+sudo ufw allow 8080/tcp
+
+# Allow MySQL from private networks only (more secure)
+sudo ufw allow from 10.0.0.0/8 to any port 3306
+sudo ufw allow from 172.16.0.0/12 to any port 3306  
+sudo ufw allow from 192.168.0.0/16 to any port 3306
+
+# Enable firewall
+sudo ufw --force enable
+
+# Verify firewall status
+sudo ufw status verbose
 ```
 
-### ⚠️ **CRITICAL SECURITY CHANGES REQUIRED**
+**✅ Verification**: Firewall should be active with correct rules.
 
-**Edit the .env file and change the following:**
-```bash
-nano .env
-```
-
-**Change these values:**
-- `FLEET_MYSQL_PASSWORD` to a strong password
-- `FLEET_MYSQL_ROOT_PASSWORD` to a strong password
-- `FLEET_AUTH_JWT_KEY` to a random 32+ character string
-- `FLEET_SESSION_KEY` to a random 32+ character string
-- Update `FLEET_SERVER_URL` to your server's IP address (e.g., `http://192.168.1.100:8080`)
-
-### 9. Install Node.js Dependencies
+### Step 10: Start Fleet Services (CRITICAL)
 
 ```bash
-make deps-js
-make generate-js
-make generate-go
-npm install -g yarn
-```
+# Ensure you're in the correct directory
+cd /opt/fleet
 
-### Verify Yarn Installation
+# Pull latest images - ENSURES LATEST VERSIONS
+docker-compose pull
 
-```bash
-yarn --version
-```
-
-## Starting Fleet Services
-
-### 10. Start Fleet Using Docker Compose
-
-```bash
+# Start all services in background
 docker-compose up -d
-```
 
-### 11. Check if Services are Running
+# Wait for services to initialize
+echo "Waiting 60 seconds for services to start..."
+sleep 60
 
-```bash
+# Check service status - ALL SHOULD BE "Up"
 docker-compose ps
 ```
 
-### 12. View Logs
+**✅ Verification**: All containers should show "Up" status.
+
+### Step 11: Verify Service Health (MANDATORY)
 
 ```bash
-docker-compose logs -f
+# Check container logs for errors
+echo "=== Fleet Server Logs ==="
+docker-compose logs --tail=20 fleet
+
+echo "=== MySQL Logs ==="
+docker-compose logs --tail=10 mysql
+
+echo "=== Redis Logs ==="
+docker-compose logs --tail=10 redis
+
+# Test database connectivity
+echo "=== Testing Database Connection ==="
+docker-compose exec mysql mysql -u fleet -pSecureFleetPassword123! -e "SELECT 'Database connection successful' AS status;"
+
+# Test Redis connectivity
+echo "=== Testing Redis Connection ==="
+docker-compose exec redis redis-cli ping
+
+# Check listening ports
+echo "=== Checking Port Status ==="
+sudo netstat -tlnp | grep -E ':(8080|3306|6379)'
 ```
 
-### 13. Access Fleet Web Interface
+**✅ Verification**: 
+- Database should return "Database connection successful"
+- Redis should return "PONG"
+- All ports should show LISTEN status
 
-- **Default URL**: `http://your-server-ip:8080`
-- **Example**: `https://192.168.1.116:8080/`
-- Default admin credentials are typically created during first setup
+---
 
-## Management Commands
+## Phase 4: Database Initialization (CRITICAL)
 
-### Additional Commands for Management
+### Step 12: Initialize Fleet Database (MUST COMPLETE)
 
-#### Stop Fleet Services
 ```bash
+# Wait for MySQL to be fully ready
+echo "Ensuring MySQL is ready for database initialization..."
+until docker-compose exec mysql mysql -u root -pSecureRootPassword123! -e "SELECT 1" >/dev/null 2>&1; do
+  echo "Waiting for MySQL..."
+  sleep 5
+done
+
+echo "MySQL is ready. Initializing Fleet database..."
+
+# Initialize Fleet database schema
+docker-compose exec fleet fleet prepare db \
+  --mysql_address=mysql:3306 \
+  --mysql_database=fleet \
+  --mysql_username=fleet \
+  --mysql_password=SecureFleetPassword123!
+
+# Check initialization status
+if [ $? -eq 0 ]; then
+    echo "✅ Database initialization completed successfully"
+else
+    echo "❌ Database initialization failed - check logs"
+    docker-compose logs fleet
+fi
+```
+
+**✅ Verification**: Should show "Database initialization completed successfully".
+
+### Step 13: Verify Fleet API (FINAL CHECK)
+
+```bash
+# Test Fleet API health
+echo "Testing Fleet API..."
+curl -s -I http://localhost:8080/api/v1/fleet/version
+
+# Get server IP for external access
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo "Fleet is accessible at:"
+echo "  Internal: http://localhost:8080"
+echo "  External: http://$SERVER_IP:8080"
+
+# Final container status check
+echo "=== Final Container Status ==="
+docker-compose ps
+```
+
+**✅ Verification**: API should return HTTP 200 status.
+
+---
+
+## Phase 5: Initial Setup (15-20 minutes)
+
+### Step 14: Access Fleet Web Interface
+
+1. **Open your web browser** and navigate to:
+   - `http://your-server-ip:8080` (replace with actual IP)
+   - Or `http://localhost:8080` if accessing locally
+
+2. **Complete the setup wizard**:
+   - Create admin account
+   - Set organization name
+   - Configure basic settings
+
+3. **Test login** with your admin credentials
+
+---
+
+## Post-Installation Verification Checklist
+
+Run these commands to ensure everything is working:
+
+```bash
+# Complete system check
+cd /opt/fleet
+
+echo "=== Docker Status ==="
+docker --version
+docker-compose --version
+
+echo "=== Container Status ==="
+docker-compose ps
+
+echo "=== Service Health ==="
+docker-compose exec mysql mysql -u fleet -pSecureFleetPassword123! -e "SHOW DATABASES;"
+docker-compose exec redis redis-cli ping
+curl -s -I http://localhost:8080/api/v1/fleet/version
+
+echo "=== Port Status ==="
+sudo netstat -tlnp | grep -E ':(8080|3306|6379)'
+
+echo "=== Fleet CLI ==="
+fleetctl --version
+
+echo "=== Firewall Status ==="
+sudo ufw status
+```
+
+**✅ All checks should pass before proceeding to use Fleet.**
+
+---
+
+## Daily Management Commands
+
+### Starting/Stopping Services
+```bash
+# Start services
+cd /opt/fleet
+docker-compose up -d
+
+# Stop services
 docker-compose down
-```
 
-#### Restart Fleet Services
-```bash
+# Restart services
 docker-compose restart
+
+# View real-time logs
+docker-compose logs -f fleet
 ```
 
-#### Update Fleet (pull latest changes and rebuild)
+### Backup Commands
 ```bash
-git pull
+# Backup database
+docker-compose exec mysql mysqldump -u root -pSecureRootPassword123! fleet > fleet_backup_$(date +%Y%m%d).sql
+
+# Backup configuration
+tar -czf fleet_config_backup_$(date +%Y%m%d).tar.gz /opt/fleet/.env /opt/fleet/docker-compose.yml
+```
+
+### Update Fleet
+```bash
+cd /opt/fleet
+docker-compose pull
 docker-compose down
-docker-compose up -d --build
+docker-compose up -d
 ```
 
-#### View Specific Service Logs
-```bash
-# View Fleet service logs
-docker-compose logs fleet
-
-# View MySQL service logs
-docker-compose logs mysql
-
-# View Redis service logs
-docker-compose logs redis
-```
-
-## System Service Management
-
-### Stop Conflicting Services
-
-#### Stop Both MySQL and Redis System Services
-```bash
-sudo systemctl stop mysql redis-server
-sudo systemctl disable mysql redis-server
-```
-
-#### Stop MySQL Service Only
-```bash
-sudo systemctl stop mysql
-sudo systemctl disable mysql
-```
-
-#### Check Network Ports
-```bash
-sudo netstat -tlnp
-```
-
-#### Check Redis Service Status
-```bash
-sudo systemctl status redis
-sudo systemctl status redis-server
-```
-
-#### Stop Redis if Running as System Service
-```bash
-sudo systemctl stop redis
-```
-
-## Agent Deployment
-
-### Fleet Agent for Windows
-
-#### Download Fleet Tools
-Download the file from [Fleet Releases](https://github.com/fleetdm/fleet/releases) (`.zip` or `.tar.gz`)
-
-#### Installation Steps
-
-1. **Extract Files**: Download and install to `C:\fleet` directory
-2. **Run Powershell as Administrator**: Navigate to `C:\fleet` path
-3. **Generate MSI Package**: Run the following command as Administrator:
-
-```cmd
-C:\fleet>fleetctl package --type=msi --enable-scripts --fleet-url=https://192.168.1.116:8080 --enroll-secret=b51LHW1Vik+FoCdaYzeaerX5cxYIMTEi --insecure
-```
-
-#### Expected Result
-The command creates the `fleet-osquery.msi` file with output similar to:
-
-```
-Generating your fleetd agent...
-Windows Installer XML Toolset Toolset Harvester version
-Copyright (c) .NET Foundation and contributors. All rights reserved.
-
-Windows Installer XML Toolset Compiler version
-Copyright (c) .NET Foundation and contributors. All rights reserved.
-
-heat.wxs
-main.wxs
-Windows Installer XML Toolset Linker version
-Copyright (c) .NET Foundation and contributors. All rights reserved.
-
-Success! You generated fleetd at C:\fleet\fleet-osquery.msi
-
-To add hosts to Fleet, install fleetd.
-Learn how: https://fleetdm.com/learn-more-about/enrolling-hosts
-```
-
-## Alternative: Running Fleet Binary
-
-### To Run Fleet Server Binary
-
-#### Step 1: Set Environment Variables
-```bash
-export FLEET_MYSQL_USERNAME=fleet
-export FLEET_MYSQL_PASSWORD=insecure
-export FLEET_MYSQL_DATABASE=fleet
-export FLEET_MYSQL_ADDRESS=127.0.0.1:3306  # or use 'mysql:3306' for Docker service
-```
-
-#### Step 2: Start Fleet Server
-```bash
-./build/fleet serve
-```
+---
 
 ## Troubleshooting
 
 ### Common Issues and Solutions
 
-#### Port Conflicts
-Check if ports are already in use:
+**Issue**: Containers won't start
 ```bash
+# Check logs
+docker-compose logs
+
+# Check port conflicts
 sudo netstat -tlnp | grep -E ':(8080|3306|6379)'
+
+# Restart services
+docker-compose down
+docker-compose up -d
 ```
 
-#### Service Status Checks
+**Issue**: Database connection failed
 ```bash
-# Check all Docker containers
-docker ps -a
-
-# Check specific Fleet services
-docker-compose ps
-
-# Check system services
-sudo systemctl status mysql
-sudo systemctl status redis-server
-```
-
-#### Database Connection Issues
-```bash
-# Test MySQL connection
-mysql -h 127.0.0.1 -P 3306 -u fleet -p
-
-# Check MySQL logs
-docker-compose logs mysql
-```
-
-#### Permission Issues
-```bash
-# Verify user is in docker group
-groups $USER
-
-# Fix docker socket permissions
-sudo chmod 666 /var/run/docker.sock
-```
-
-### Log Analysis
-
-#### Fleet Application Logs
-```bash
-# Real-time Fleet logs
-docker-compose logs -f fleet
-
-# Last 100 lines of Fleet logs
-docker-compose logs --tail=100 fleet
-```
-
-#### Database and Cache Logs
-```bash
-# MySQL logs
+# Check MySQL container
 docker-compose logs mysql
 
-# Redis logs  
-docker-compose logs redis
+# Reset database
+docker-compose down -v
+docker-compose up -d
+# Wait and re-run database initialization
 ```
 
-#### System Resource Monitoring
+**Issue**: Web interface not accessible
 ```bash
-# Check disk space
-df -h
-
-# Check memory usage
-free -h
-
-# Check running processes
-top
-```
-
-## Security Considerations
-
-### Essential Security Steps
-
-1. **Change Default Passwords**: 
-   - MySQL passwords in `.env` file
-   - Generate strong JWT and session keys
-
-2. **Network Security**:
-   - Configure firewall rules
-   - Use HTTPS in production
-   - Restrict access to management ports
-
-3. **File Permissions**:
-   ```bash
-   # Secure .env file
-   chmod 600 .env
-   chown $USER:$USER .env
-   ```
-
-4. **Regular Updates**:
-   ```bash
-   # Update system packages
-   sudo apt update && sudo apt upgrade -y
-   
-   # Update Fleet
-   git pull
-   docker-compose pull
-   docker-compose up -d
-   ```
-
-### Production Deployment Checklist
-
-- [ ] Change all default passwords and secrets
-- [ ] Configure HTTPS/TLS certificates
-- [ ] Set up proper firewall rules
-- [ ] Configure backup strategy for database
-- [ ] Set up monitoring and alerting
-- [ ] Configure SMTP for email notifications
-- [ ] Test agent enrollment process
-- [ ] Document custom configurations
-
-## Additional Resources
-
-- [Fleet Documentation](https://fleetdm.com/docs)
-- [Fleet GitHub Repository](https://github.com/fleetdm/fleet)
-- [Fleet Community Slack](https://fleetdm.com/slack)
-- [Osquery Documentation](https://osquery.readthedocs.io/)
-
-## Network Configuration
-
-### Required Ports
-
-| Port | Service | Purpose |
-|------|---------|---------|
-| 8080 | Fleet UI/API | Web interface and API access |
-| 3306 | MySQL | Database connections |
-| 6379 | Redis | Cache and session storage |
-
-### Firewall Configuration Example
-
-```bash
-# Allow Fleet web interface
-sudo ufw allow 8080/tcp
-
-# Allow SSH (if needed)
-sudo ufw allow 22/tcp
-
-# Enable firewall
-sudo ufw enable
-
-# Check status
+# Check firewall
 sudo ufw status
+
+# Check Fleet container
+docker-compose logs fleet
+
+# Test local connectivity
+curl http://localhost:8080/api/v1/fleet/version
 ```
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: June 2025  
-**Compatibility**: Fleet v4.x, Ubuntu 18.04+  
-**Tested Environment**: Ubuntu Server 20.04 LTS with Docker 24.x
+## Security Hardening (Post-Installation)
+
+```bash
+# Set proper file permissions
+sudo chown -R $USER:docker /opt/fleet
+chmod 600 /opt/fleet/.env
+chmod 644 /opt/fleet/docker-compose.yml
+
+# Configure log rotation
+sudo tee /etc/logrotate.d/fleet << EOF
+/var/lib/docker/containers/*/*-json.log {
+    rotate 7
+    daily
+    compress
+    size 50M
+    missingok
+    delaycompress
+    copytruncate
+}
+EOF
+
+# Enable automatic security updates
+sudo apt install -y unattended-upgrades
+sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+---
+
+## Important Security Notes
+
+⚠️ **BEFORE PRODUCTION USE**:
+
+1. **Change default passwords** in `/opt/fleet/.env`
+2. **Generate strong JWT and session keys** (32+ characters)
+3. **Configure SSL/TLS certificates** for HTTPS
+4. **Restrict database access** to specific networks
+5. **Enable backup procedures**
+6. **Monitor logs regularly**
+
+---
+
+## Support and Documentation
+
+- **Fleet Documentation**: https://fleetdm.com/docs
+- **GitHub Issues**: https://github.com/fleetdm/fleet/issues
+- **Community Slack**: https://fleetdm.com/slack
+
+---
+
+## Installation Complete! ✅
+
+If you've followed all steps without skipping any commands, you now have a fully functional Fleet MDM system running on your Ubuntu server.
+
+**Next Steps**:
+1. Access the web interface and complete the setup wizard
+2. Install osquery agents on your devices
+3. Configure your first queries and policies
+4. Set up monitoring and alerting
+
+**Total Installation Time**: Approximately 90-120 minutes
